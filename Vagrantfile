@@ -7,12 +7,14 @@ CLOUD_CONFIG_PATH = "./user-data"
 CONFIG= "config.rb"
 
 # Defaults for config options defined in CONFIG
-$num_instances = 1
-$update_channel = "alpha"
+$num_instances = 3
 $enable_serial_logging = false
 $vb_gui = false
-$vb_memory = 1024
+$vb_memory = 256
 $vb_cpus = 1
+
+BASE_IP_ADDR  = ENV['BASE_IP_ADDR'] || "172.17.8"
+ETCD_DISCVERY = "#{BASE_IP_ADDR}.100"
 
 # Attempt to apply the deprecated environment variable NUM_INSTANCES to
 # $num_instances while allowing config.rb to override it
@@ -25,25 +27,32 @@ if File.exist?(CONFIG)
 end
 
 Vagrant.configure("2") do |config|
-  config.vm.box = "coreos-%s" % $update_channel
+  config.vm.box = "coreos-alpha"
   config.vm.box_version = ">= 308.0.1"
-  config.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant.json" % $update_channel
+  config.vm.box_url = "http://storage.core-os.net/coreos/amd64-usr/alpha/coreos_production_vagrant.json"
 
   config.vm.provider :vmware_fusion do |vb, override|
-    override.vm.box_url = "http://%s.release.core-os.net/amd64-usr/current/coreos_production_vagrant_vmware_fusion.json" % $update_channel
-  end
-
-  config.vm.provider :virtualbox do |v|
-    # On VirtualBox, we don't have guest additions or a functional vboxsf
-    # in CoreOS, so tell Vagrant that so it can be smarter.
-    v.check_guest_additions = false
-    v.functional_vboxsf     = false
+    override.vm.box_url = "http://storage.core-os.net/coreos/amd64-usr/alpha/coreos_production_vagrant_vmware_fusion.json"
   end
 
   # plugin conflict
   if Vagrant.has_plugin?("vagrant-vbguest") then
     config.vbguest.auto_update = false
   end
+
+
+  config.vm.define "discovery" do |discovery|
+    discovery.vm.hostname = "discovery"
+    discovery.vm.network :private_network, ip: ETCD_DISCVERY
+    discovery.vm.provision :file, source: "./discovery", destination: "/tmp/vagrantfile-user-data"
+    discovery.vm.provision :shell do |sh|
+      sh.privileged = true
+      sh.inline = <<-EOT
+        mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/
+      EOT
+    end
+  end
+  
 
   (1..$num_instances).each do |i|
     config.vm.define vm_name = "core-%02d" % i do |config|
@@ -70,7 +79,7 @@ Vagrant.configure("2") do |config|
       end
 
       if $expose_docker_tcp
-        config.vm.network "forwarded_port", guest: 4243, host: ($expose_docker_tcp + i - 1), auto_correct: true
+        config.vm.network "forwarded_port", guest: 4243, host: $expose_docker_tcp, auto_correct: true
       end
 
       config.vm.provider :virtualbox do |vb|
@@ -79,15 +88,20 @@ Vagrant.configure("2") do |config|
         vb.cpus = $vb_cpus
       end
 
-      ip = "172.17.8.#{i+100}"
-      config.vm.network :private_network, ip: ip
+      config.vm.network :private_network, ip: "#{BASE_IP_ADDR}.#{i+100}"
 
       # Uncomment below to enable NFS for sharing the host machine into the coreos-vagrant VM.
       #config.vm.synced_folder ".", "/home/core/share", id: "core", :nfs => true, :mount_options => ['nolock,vers=3,udp']
 
       if File.exist?(CLOUD_CONFIG_PATH)
         config.vm.provision :file, :source => "#{CLOUD_CONFIG_PATH}", :destination => "/tmp/vagrantfile-user-data"
-        config.vm.provision :shell, :inline => "mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/", :privileged => true
+        config.vm.provision :shell do |sh|
+          sh.privileged = true
+          sh.inline = <<-EOT
+            sed -e "s/%ETCD_DISCVERY%/#{ETCD_DISCVERY}/g" -i /tmp/vagrantfile-user-data
+            mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/
+          EOT
+        end
       end
 
     end
