@@ -51,8 +51,17 @@ Vagrant.configure("2") do |config|
         mv /tmp/vagrantfile-user-data /var/lib/coreos-vagrant/
       EOT
     end
+
+    discovery.vm.synced_folder ".", "/home/core/share", id: "core", :nfs => true, :mount_options => ['nolock,vers=3,udp']
+
+    discovery.vm.provider :virtualbox do |vb|
+      vb.gui = $vb_gui
+      vb.memory = $vb_memory
+      vb.cpus = $vb_cpus
+    end
   end
   
+
 
   (1..$num_instances).each do |i|
     config.vm.define vm_name = "core-%02d" % i do |config|
